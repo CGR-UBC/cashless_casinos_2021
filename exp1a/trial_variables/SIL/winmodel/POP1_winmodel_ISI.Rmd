@@ -1,0 +1,206 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.4
+  kernelspec:
+    display_name: R
+    language: R
+    name: ir
+---
+
+# POP1 win model ISI
+Fixed effects regression of ITI from slots tracker.
+
+```{r}
+import_library = function(lib_name){
+    suppressWarnings(suppressMessages(require(lib_name, character.only = TRUE)))
+}
+import_library('Hmisc') # for rcorr
+import_library('car') # regression diagnostics
+import_library('MASS') # residuals?
+import_library('boot')
+import_library('ggplot2')
+import_library('pastecs')
+import_library('caTools')
+import_library('RColorBrewer')
+import_library('corrplot')
+import_library('tidyverse')
+import_library('robustbase')
+library('extofficer') 
+
+
+source(file="../../../../../POP_functions.R")
+source(file="../../../../../glmPost.R")
+```
+
+```{r}
+modeldata=load_data('ISI', 'win','POP1')
+```
+
+## Predictor Correlations and VIF
+VIF not a problem for factors with more than three levels or interactions (https://www.statisticshowto.com/variance-inflation-factor/).
+Multicollinearity increases variance of stat - VIF = by how much is it inflated compared to if no multiC. Means that we may miss sig effects. But this OK as we want to err on side of caution anyway.
+
+```{r}
+cor_matrix<-modeldata[,c("sqrtTrial.no","logResult","Final.balance")]
+cor(cor_matrix)
+
+vifmodel<-lm(logISI~Participant.f
+            + sqrtTrial.no
+            + Final.balance
+            + logResult 
+            ,data=modeldata)
+vif(vifmodel)
+```
+
+##  Log Model
+
+```{r}
+logmodel1<-glm(logISI~Participant.f
+             + sqrtTrial.no 
+             + Binary.bet.change
+             + logResult
+             + logResult:group
+             + Final.balance
+             -1
+            ,data=modeldata,family=gaussian)
+print.mod.summary(logmodel1,modeldata)
+```
+
+## Robust log model
+Using robustbase.
+KS2014 recomended setting in robustbase.pdf - good for models with factors, particialry when some levels have small sample (previously I think these would have been deweighted too much)
+fast.s.large.n = Inf stops the large n straegy - which fails (I think something to do with splitting data). We don;t want to split data, and it errors when try. Only happen with loss ata - when eeoigh rows to try split
+
+```{r}
+robmodel1<-lmrob(logISI~Participant.f
+             + sqrtTrial.no 
+             + Binary.bet.change
+             + logResult
+             + logResult:group
+             + Final.balance
+             -1
+            ,data=modeldata,control=lmrob.control(fast.s.large.n = Inf,setting="KS2014"))
+summary(robmodel1)
+```
+```{r}
+robustmodel<-tidy.glmrob(robmodel1,conf.int=TRUE)
+write.table(tail(robustmodel,5),"POP1_robust_model.csv",sep=",")
+
+data<-(tail(robustmodel,5))
+data<-data[,c(1,2,6,7,5)]
+
+data<-rename_cols_for_tables(data)  
+data<-rename_rows_for_tables(data)  
+
+filename = "POP1_robmodel_win_ISI"
+title = "Experiment 1a: Predicting spin iniitation latency after a win"
+pcol="p value"
+
+apa_table(data,filename=filename,pcol=pcol,title=title,column_header=names(data))
+
+```
+
+## Check weight properties
+
+```{r}
+modeldata_withweights<-robmodel_weights(modeldata,robmodel1,'ISI')
+modeldata$rweights<-modeldata_withweights$rweights
+
+robust_diagnostics(logmodel1,robmodel1) #prints image files to folder
+```
+
+## Diagnostics (log model)
+
+```{r}
+nullmodel<-glm(logISI~Participant.f-1,data=modeldata,family=gaussian)
+data4diagnostics<-glmPost(logmodel1,modeldata,nullmodel)
+write.table(data4diagnostics,"data_with_diagnostics.csv",sep=",")
+```
+
+```{r}
+glmPostfigs(logmodel1,data4diagnostics,0)
+```
+
+## Predicted for plotting
+
+```{r}
+predicted<-expand.grid(Participant.f=unique(modeldata$Participant.f),
+                       group=unique(modeldata$group),
+                       logResult=c(1,2,3,4,5,6),
+                       Final.balance=c(0,10,20,30,40,50,60),
+                       sqrtTrial.no=median(modeldata$sqrtTrial.no),
+                       Binary.bet.change=0)
+predicted$predicted<-predict(logmodel1,predicted ,type="response")
+write.table(predicted,"matrix_predicted.csv",sep=",")
+
+predicted<-expand.grid(Participant.f=unique(modeldata$Participant.f),
+                       group=unique(modeldata$group),
+                       logResult=c(1,2,3,4,5,6),
+                       Final.balance=c(0,10,20,30,40,50,60),
+                       sqrtTrial.no=median(modeldata$sqrtTrial.no),
+                       Binary.bet.change=0)
+predicted$predicted<-predict(robmodel1,predicted ,type="response")
+write.table(predicted,"robust_matrix_predicted.csv",sep=",")
+
+```
+
+## Reverse model
+Not neede  no group effects
+
+
+## Outlier removal as pre-reg
+
+```{r}
+source(file="../../../../../MRtrim.R")
+RT_data<-data.frame(modeldata$X,modeldata$Participant,modeldata$Binary.bet.change,modeldata$logISI)
+names(RT_data) <- c("Trial","Participant","condition","RT")
+MRtrimoutput<-MRtrim(RT_data,0,5)#call RT trimming function - 
+                                    #don't removed min, or if sample size < 5
+
+data_with_modRT<-cbind(modeldata,MRtrimoutput$trimmed_data_withNAs)
+data_with_modRT$removed<-(is.na(data_with_modRT$mod_RT)==TRUE)
+data_trimmed<-data_with_modRT[complete.cases(data_with_modRT[ , "mod_RT"]),]
+
+removedTrials<-data_with_modRT[is.na(data_with_modRT$mod_RT),]
+
+write.table(MRtrimoutput$removedCount,"removed_trials_count.csv",sep=",")
+write.table(MRtrimoutput$removedTrials,"removed_trials.csv",sep=",")
+
+#print which participants were skipped by MRtrim (count=NA)
+smallNconditions<-MRtrimoutput$removedCount[is.na(MRtrimoutput$removedCount$count),]
+write.table(smallNconditions,"smallNparticipants.csv",sep=",")
+
+cat("Percent trials removed:              ",(nrow(removedTrials)/nrow(data))*100,"\n")
+cat("N trials in trimmed data:            ",nrow(data_trimmed),"\n")
+cat("N trials in original data:           ",nrow(modeldata),"\n")
+cat("N trials removed:                    ",nrow(removedTrials),"\n\n")
+
+cat("Bet change trials in original data:  ",nrow(subset(modeldata,Binary.bet.change==1)),"\n")
+cat("Removed bet change trials:           ",nrow(subset(removedTrials,Binary.bet.change==1)),"\n")
+```
+
+```{r}
+
+robmodel2<-lmrob(logISI~Participant.f
+             + sqrtTrial.no 
+             + Binary.bet.change
+             + logResult
+             + logResult:group
+             + Final.balance
+             #+ Final.balance:group
+             -1
+            ,data=data_trimmed,control=lmrob.control(fast.s.large.n = Inf,setting="KS2014"))
+summary(robmodel2)
+```
+
+## Game mode
+Not needed no group effects
+
+```{r}
+
+```

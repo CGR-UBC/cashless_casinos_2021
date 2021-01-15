@@ -1,0 +1,242 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.4
+  kernelspec:
+    display_name: R
+    language: R
+    name: ir
+---
+
+```{r}
+import_library = function(lib_name){
+    suppressWarnings(suppressMessages(require(lib_name, character.only = TRUE)))
+}
+
+library('Hmisc') # for rcorr
+library('car') # regression diagnostics
+library('MASS') # residuals?
+library('boot')
+library('ggplot2')
+library('pastecs')
+library('caTools')
+library('RColorBrewer')
+library('corrplot')
+library('tidyverse')
+library('robustbase')
+library('extofficer') 
+
+source(file="../../../../../POP_functions.R")
+source(file="../../../../../glmPost.R")
+```
+
+```{r}
+modeldata=load_data('ISI', 'loss','POP1')
+```
+
+## Predictor Correlations and VIF
+VIF not a problem for factors with more than three levels or interactions (https://www.statisticshowto.com/variance-inflation-factor/).
+Multicollinearity increases variance of stat - VIF = by how much is it inflated compared to if no multiC. Means that we may miss sig effects. But this OK as we want to err on side of caution anyway.
+
+```{r}
+cor_matrix<-modeldata[,c("sqrtTrial.no","Final.balance","logLoss.streak")]
+
+cor(cor_matrix)
+
+vifmodel<-glm(logISI~Participant.f
+             + sqrtTrial.no
+             + Binary.bet.change
+             + logLoss.streak
+             + Final.balance
+             ,data=modeldata)
+
+vif(vifmodel)
+```
+## Log Model
+```{r}
+logmodel1<-glm(logISI~Participant.f
+             + Binary.bet.change
+             + sqrtTrial.no
+             + Final.balance
+             + Final.balance:group
+             + logLoss.streak
+             + logLoss.streak:group
+             -1
+            ,data=modeldata)
+print.mod.summary(logmodel1,modeldata)
+```
+
+## Robust log model
+Using robustbase.
+KS2014 recomended setting in robustbase.pdf - good for models with factors, particialry when some levels have small sample (previously I think these would have been deweighted too much)
+fast.s.large.n = Inf stops the large n straegy - which fails (I think something to do with splitting data). We don;t want to split data, and it errors when try.
+
+```{r}
+robmodel1<-lmrob(logISI~Participant.f
+             + sqrtTrial.no
+             + Binary.bet.change
+             + Final.balance
+             + Final.balance:group
+             + logLoss.streak
+             + logLoss.streak:group
+             -1
+            ,data=modeldata,control=lmrob.control(fast.s.large.n = Inf,setting="KS2014"))
+summary(robmodel1)
+```
+```{r}
+robustmodel<-tidy.glmrob(robmodel1,conf.int=TRUE)
+write.table(tail(robustmodel,6),"robust_model.csv",sep=",")
+
+data<-(tail(robustmodel,6))
+data<-data[,c(1,2,6,7,5)]
+
+data<-rename_cols_for_tables(data)  
+data<-rename_rows_for_tables(data)  
+
+filename = "POP1_robmodel_loss_ISI"
+title = "Experiment 1a: Predicting spin iniitation latency after a loss"
+pcol="p value"
+
+apa_table(data,filename='test',pcol=pcol,title=title,column_header=names(data))
+```
+
+## Check weight properties
+
+```{r}
+modeldata_withweights<-robmodel_weights(modeldata,robmodel1,'ISI')
+modeldata$rweights<-modeldata_withweights$rweights #add weights to data output 
+
+robust_diagnostics(logmodel1,robmodel1) #prints image files to folder
+```
+
+## Diagnostics (log model)
+
+```{r}
+nullmodel<-lmrob(logISI~Participant.f-1,data=modeldata,control=lmrob.control(fast.s.large.n = Inf,setting="KS2014"))
+data4diagnostics<-glmPost(logmodel1,modeldata,nullmodel)
+write.table(data4diagnostics,"data_with_diagnostics.csv",sep=",")
+```
+
+```{r}
+glmPostfigs(logmodel1,data4diagnostics,0) #prints image files to folder
+```
+
+## Predicted probs for plotting
+
+```{r}
+predicted<-expand.grid(Participant.f=unique(modeldata$Participant.f),
+                       Binary.bet.change=0,
+                       group=unique(modeldata$group),
+                       Final.balance=c(0,10,20,30,40,50,60),
+                       logLoss.streak=c(0,1,2,3,4),
+                       sqrtTrial.no=median(modeldata$sqrtTrial.no))
+predicted$predicted<-predict(logmodel1,predicted ,type="response")
+write.table(predicted,"matrix_predicted.csv",sep=",")
+
+predicted<-expand.grid(Participant.f=unique(modeldata$Participant.f),
+                       Binary.bet.change=0,
+                       group=unique(modeldata$group),
+                       Final.balance=c(0,10,20,30,40,50,60),
+                       logLoss.streak=c(0,1,2,3,4),
+                       sqrtTrial.no=median(modeldata$sqrtTrial.no))
+predicted$predicted<-predict(robmodel1,predicted ,type="response")
+write.table(predicted,"robust_matrix_predicted.csv",sep=",")
+```
+
+## Reverse rob model
+
+```{r}
+modeldata$group_rev<-modeldata$group
+modeldata$group_rev<- factor(modeldata$group_rev, levels=rev(levels(modeldata$group_rev)))
+
+robmodel1rev<-lmrob(logISI~Participant.f
+             + sqrtTrial.no
+             + Binary.bet.change
+             + Final.balance
+             + Final.balance:group_rev
+             + logLoss.streak
+             + logLoss.streak:group_rev
+             -1
+            ,data=modeldata,control=lmrob.control(fast.s.large.n = Inf,setting="KS2014"))
+summary(robmodel1rev)
+robustmodelrev<-tidy.glmrob(robmodel1rev,conf.int=TRUE)
+write.table(tail(robustmodelrev,6),"POP1_robust_model_gp_rev.csv",sep=",")
+
+data<-(tail(robustmodelrev,6))
+data<-data[,c(1,2,6,7,5)]
+
+data<-rename_cols_for_tables(data)  
+data<-rename_rows_for_tables(data)  
+
+filename = "POP1_robmodel_loss_ISI_gp_rev"
+title = "Experiment 1a: Predicting spin iniitation latency after a loss: group reversed"
+pcol="p value"
+
+apa_table(data,filename=filename,pcol=pcol,title=title,column_header=names(data))
+
+```
+
+## Outlier removal as in pre reg
+
+```{r}
+source(file="../../../../../MRtrim.R")
+RT_data<-data.frame(modeldata$X,modeldata$Participant,modeldata$Binary.bet.change,modeldata$logISI)
+names(RT_data) <- c("Trial","Participant","condition","RT")
+MRtrimoutput<-MRtrim(RT_data,0,5)#call RT trimming function - 
+                                    #don't removed min, or if sample size < 5
+
+data_with_modRT<-cbind(modeldata,MRtrimoutput$trimmed_data_withNAs)
+data_with_modRT$removed<-(is.na(data_with_modRT$mod_RT)==TRUE)
+data_trimmed<-data_with_modRT[complete.cases(data_with_modRT[ , "mod_RT"]),]
+
+removedTrials<-data_with_modRT[is.na(data_with_modRT$mod_RT),]
+
+write.table(MRtrimoutput$removedCount,"removed_trials_count.csv",sep=",")
+write.table(MRtrimoutput$removedTrials,"removed_trials.csv",sep=",")
+
+#print which participants were skipped by MRtrim (count=NA)
+smallNconditions<-MRtrimoutput$removedCount[is.na(MRtrimoutput$removedCount$count),]
+write.table(smallNconditions,"smallNparticipants.csv",sep=",")
+
+cat("Percent trials removed:              ",(nrow(removedTrials)/nrow(data))*100,"\n")
+cat("N trials in trimmed data:            ",nrow(data_trimmed),"\n")
+cat("N trials in original data:           ",nrow(modeldata),"\n")
+cat("N trials removed:                    ",nrow(removedTrials),"\n\n")
+
+cat("Bet change trials in original data:  ",nrow(subset(modeldata,Binary.bet.change==1)),"\n")
+cat("Removed bet change trials:           ",nrow(subset(removedTrials,Binary.bet.change==1)),"\n")
+```
+
+```{r}
+robmodel1outlier<-lmrob(logISI~Participant.f
+             + Binary.bet.change
+             + sqrtTrial.no
+             + Final.balance
+             + Final.balance:group
+             + logLoss.streak
+             + logLoss.streak:group
+             -1
+            ,data=data_trimmed,control=lmrob.control(fast.s.large.n = Inf,setting="KS2014"))
+summary(robmodel1outlier)
+
+robustmodeloutlier<-tidy.glmrob(robmodel1outlier,conf.int=TRUE)
+write.table(tail(robustmodeloutlier,6),"POP1_robust_model_outlier_removal.csv",sep=",")
+
+data<-(tail(robustmodelrev,6))
+data<-data[,c(1,2,6,7,5)]
+
+data<-rename_cols_for_tables(data)  
+data<-rename_rows_for_tables(data)  
+
+filename = "POP1_robmodel_loss_ISI_outlier_removal"
+title = "Experiment 1a: Predicting spin iniitation latency after a loss: prereg outlier removal"
+pcol="p value"
+
+apa_table(data,filename=filename,pcol=pcol,title=title,column_header=names(data))
+
+
+```

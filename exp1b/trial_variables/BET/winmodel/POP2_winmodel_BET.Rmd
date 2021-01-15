@@ -1,0 +1,192 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.4
+  kernelspec:
+    display_name: R
+    language: R
+    name: ir
+---
+
+# POP2 win model BET
+Organised version of New Horizons analysis.
+Don't separate wins and LDWs.
+Don't include reference as had previously decided to remove it as became too complicated - reference binary is correlated with balance - another way of describing balance.
+
+This is analysis of bet behaviour (higher or lower than participant median) after a win outcome. There are limited number of bet changes in these data, so these models aren't very powerful. Have excluded participants who don't change their bet. A lot of warning messages for pred probs close to zero or one. 
+
+Originally had loss streak length in but realised it doesn't make sense - sometimnes there are 2 wins in a row - and a preceding win is quan. different from a preceding loss. Also this is what outcome of trial was beore the cirrent outcome. Doesn't really make sense.
+
+```{r}
+import_library = function(lib_name){
+    suppressWarnings(suppressMessages(require(lib_name, character.only = TRUE)))
+}
+
+import_library('Hmisc') # for rcorr
+import_library('car') # regression diagnostics
+import_library('MASS') # residuals?
+import_library('boot')
+import_library('ggplot2')
+import_library('pastecs')
+import_library('caTools')
+import_library('RColorBrewer')
+import_library('corrplot')
+import_library('tidyverse')
+import_library('robustbase')
+
+source(file="../../../../../POP_functions.R")
+source(file="../../../../../glmPost.R")
+```
+
+```{r}
+modeldata=load_data('BET', 'win','POP2')
+```
+
+## Variable correlations
+
+```{r}
+cor_matrix<-modeldata[,c("sqrtTrial.no","logResult","Final.balance")]
+cor(cor_matrix)
+
+vifmodel<-glm(Next.bet.binary~Participant.f
+             + sqrtTrial.no 
+             + logResult
+             + Final.balance
+            ,data=modeldata,family=binomial())
+vif(vifmodel)
+
+```
+
+## Model
+
+```{r}
+model1<-glm(Next.bet.binary~Participant.f
+            + sqrtTrial.no
+            + logResult
+            + logResult:group
+            + Final.balance
+            -1
+            ,data=modeldata,family=binomial())
+print.mod.summary(model1,subset(modeldata,Participant!=19))
+```
+
+
+## Robust model
+
+```{r}
+robmodel1<-glmrob(Next.bet.binary~Participant.f
+            + sqrtTrial.no
+            + logResult
+            + logResult:group
+            + Final.balance
+            -1,
+               family=binomial, data=subset(modeldata,Participant!=19),method="Mqle")
+
+summary(robmodel1)
+```
+
+```{r}
+robustmodel<-tidy.glmrob(robmodel1,conf.int=TRUE)
+
+robustmodel$OR<-exp(robustmodel$estimate)
+robustmodel$OR.low<-exp(robustmodel$conf.low)
+robustmodel$OR.high<-exp(robustmodel$conf.high)
+
+write.table(tail(robustmodel,4),"robust_model.csv",sep=",")
+
+data<-(tail(robustmodel,4))
+data<-data[,c(1,8,9,10,5)]
+
+data<-rename_cols_for_tables(data)  
+data<-rename_rows_for_tables(data)  
+
+filename = "POP2_robmodel_win_BET"
+title = "Experiment 1b: Predicting bet size after a win"
+pcol="p value"
+
+apa_table(data,filename=filename,pcol=pcol,title=title,column_header=names(data))
+```
+## Check rob model weights
+
+```{r}
+modeldata_withweights<-robmodel_weights(modeldata,robmodel1,'BET')
+modeldata$rweights<-modeldata_withweights$rweights
+
+robust_diagnostics(model1,robmodel1)
+```
+
+## Diagnostics (log model)
+
+```{r}
+nullmodel<-glm(Next.bet.binary~Participant.f -1,data=modeldata,family=binomial())
+data4diagnostics<-glmPost(model1,modeldata,nullmodel)
+write.table(data4diagnostics,"data_with_diagnostics.csv",sep=",")
+```
+
+```{r}
+glmPostfigs(model1,data4diagnostics,0)
+```
+
+## Predicted probs for plot
+
+```{r}
+predicted<-expand.grid(Participant.f=unique(modeldata$Participant.f),
+                       group=unique(modeldata$group),
+                       logResult=c(1,2,3,4,5,6),
+                       Final.balance=c(0,10,20,30,40,50,60),
+                       sqrtTrial.no=median(modeldata$sqrtTrial.no))
+predicted$predicted<-predict(model1,predicted ,type="response")
+write.table(predicted,"matrix_predicted.csv",sep=",")
+
+predicted<-expand.grid(Participant.f=unique(modeldata$Participant.f),
+                       group=unique(modeldata$group),
+                       logResult=c(1,2,3,4,5,6),
+                       Final.balance=c(0,10,20,30,40,50,60),
+                       sqrtTrial.no=median(modeldata$sqrtTrial.no))
+predicted$predicted<-predict(robmodel1,predicted ,type="response")
+write.table(predicted,"robust_matrix_predicted.csv",sep=",")
+
+```
+
+## Does game mode change anything?
+Error in running study - machne was not consistentlydsiplaying cash or credit. Luckily evenly balanced between the groups.
+
+```{r}
+unique_table<-modeldata %>% distinct(Participant, .keep_all = TRUE)
+unique_table %>% group_by(group,Game_mode) %>% tally()
+```
+
+model2<-glm(Next.bet.binary~Participant.f
+            + sqrtTrial.no
+            + logResult
+            #+ logResult:group
+            + Final.balance
+            #+ Final.balance:group
+           # + Final.balance:Game_mode
+            +logResult:Game_mode
+            -1
+            ,data=modeldata,family=binomial())
+print.mod.summary(model2,modeldata)
+
+
+
+robmodel2<-glmrob(Next.bet.binary~Participant.f
+            + sqrtTrial.no
+            + logResult
+            #+ logResult:group
+            + Final.balance
+            #+ Final.balance:group
+           # + Final.balance:Game_mode
+            +logResult:Game_mode
+            -1
+            , family=binomial, data=modeldata,method="Mqle")
+summary(robmodel2)            
+
+
+```{r}
+
+```

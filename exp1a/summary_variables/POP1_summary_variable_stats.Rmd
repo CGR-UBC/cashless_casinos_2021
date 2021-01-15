@@ -1,0 +1,154 @@
+---
+
+---
+
+# Summary stats for POP 1
+### Eve Limbrick-Oldfield
+#### 20/06/2018
+
+Test for sig diffs between summary variables - 5 min spend, total spend, final  balance, average bet size.
+
+
+```{r}
+library(Hmisc)
+library(pastecs)
+library(dplyr)
+rfromwilcox<-function(wilcoxModel,N){
+  z<-qnorm(wilcoxModel$p.value/2)
+  r<-z/sqrt(N)
+  cat(wilcoxModel$data.name,"Effect size, r = " , r)
+  }
+#install.packages("remotes")
+#remotes::install_github("rettopnivek/extofficer")
+```
+
+### Data prep
+
+```{r}
+#Load data, create binary group variable, exlude participants who didn't follow instructions,
+
+data=read.csv("../../data_for_analysis/POP1_participant_summary_variables.csv")
+
+data$group<-data$Cash
+data$group<-ifelse(is.na(data$group)==TRUE,0,1)
+trial_data=read.csv("../../data_for_analysis/all_participants_trial_data.csv")
+mean.bet<-as.data.frame(do.call("rbind",by(trial_data$Bet.amount,trial_data$Participant,stat.desc,basic=TRUE)))
+data$mean.bet<-mean.bet$mean
+
+data$Total.won<-data$Total.wager.by.10.minutes+data$Total.wager.after.10.minutes
+data$Total.wager<-data$Total.wager.by.10.minutes+data$Total.wager.after.10.minutes
+
+unique_table<-data %>% distinct(Participant.ID, .keep_all = TRUE)
+cat('\n\nIncluded participants:\n',unique_table$Participant.ID)
+n_per_gp<-unique_table %>% group_by(group) %>% tally()
+cat('\n\n')
+print(n_per_gp)  
+
+```
+
+## Number of bets AND LAST BET TIME per participant for QC and exclusions
+
+```{r}
+new_aggregates<-setNames(aggregate(Time.of.bet.relative.to.first.bet ~ Participant, data = trial_data, max),c("Participant","Time"))
+Nbets_per_participant<-setNames(aggregate(Trial.no ~ Participant, data = trial_data, max),c("Participant","Nbets"))
+new_aggregates$Nbets<-Nbets_per_participant$Nbets
+new_aggregates$Final_balance<-data$Final.balance
+
+print("Participants who finished before 10 mins")
+subset(new_aggregates,Time<600)
+
+write.csv(new_aggregates,"POP1_Nbets_and_last_bet_time.csv", row.names = FALSE)
+
+```
+
+### Are any variables correlated?
+
+## Pairwise group comparisons - traits
+
+Group 0 = Cash
+
+### Age
+3 missing
+
+
+```{r}
+#DV (age) IV (group)
+by(data$Age,data$group,stat.desc,basic=TRUE,norm=TRUE)
+Age_model<-wilcox.test(data$Age~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+Age_model
+rfromwilcox(Age_model,56) #df = n in group1 -1 + n in group 2 -1
+
+```
+
+### Sex
+Male = 1, female = 2
+
+```{r}
+summarise(group_by(data,group,Gender),count =n())
+chisq.test(table(data$group, data$Gender))
+```
+
+### PGSI
+
+```{r}
+by(data$PGSI,data$group,stat.desc,basic=TRUE,norm=TRUE)
+PGSI_model<-wilcox.test(data$PGSI~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+PGSI_model
+rfromwilcox(PGSI_model,59) #df = n in group1 -1 + n in group 2 -1
+
+```
+
+### Slot spend month
+
+```{r}
+by(data$slot_spend_month,data$group,stat.desc,basic=TRUE,norm=TRUE)
+slot_spend_month_model<-wilcox.test(data$slot_spend_month~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+slot_spend_month_model
+rfromwilcox(slot_spend_month_model,59) #df = n in group1 -1 + n in group 2 -1
+
+```
+
+## Pairwise comparisons: slot behaviour
+
+
+### Mean bet amount 
+
+```{r}
+# Exclude early cash out 
+data<-subset(data,Participant.ID != 24) # didn't gamable for required time
+```
+
+```{r}
+by(data$mean.bet,data$group,stat.desc,basic=TRUE,norm=TRUE)
+mean.bet_model<-wilcox.test(data$mean.bet~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+mean.bet_model
+rfromwilcox(mean.bet_model,58) #df = n in group1 -1 + n in group 2 -1
+```
+
+### Final balance
+
+```{r}
+#compare final balance between groups: not normal. Not sig. But trend for cash>credit.
+by(data$Final.balance,data$group,stat.desc,basic=TRUE,norm=TRUE)
+Final.balance_model<-wilcox.test(data$Final.balance~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+Final.balance_model
+rfromwilcox(Final.balance_model,58) #df = n in group1 -1 + n in group 2 -1
+```
+
+### Five min spend. 
+
+```{r}
+by(data$Total.wager.by.5.minutes,data$group,stat.desc,basic=TRUE,norm=TRUE)
+Total.wager.by.5.minutes_model<-wilcox.test(data$Total.wager.by.5.minutes~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+Total.wager.by.5.minutes_model
+rfromwilcox(Total.wager.by.5.minutes_model,58) #df = n in group1 -1 + n in group 2 -1
+```
+
+### Total spend
+
+```{r}
+by(data$Total.wager,data$group,stat.desc,basic=TRUE,norm=TRUE)
+Total.wager_model<-wilcox.test(data$Total.wager~data$group,paired=FALSE,exact=FALSE,na.action = na.exclude)# turn off exact as get error that cant do it
+Total.wager_model
+rfromwilcox(Total.wager_model,58) #df = n in group1 -1 + n in group 2 -1
+```
